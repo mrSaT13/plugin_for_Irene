@@ -46,7 +46,8 @@ config = {
 
 config_comment = """
 УНИВЕРСАЛЬНЫЙ ПЛАГИН НОВОСТЕЙ v1.0
-
+Автор: mrSaT13
+Репозиторий: ***https://github.com/mrSaT13/plugin_for_Irene***
 ИСТОЧНИКИ:
 ✅ Mail.ru RSS — основной, работает без ключа
 ✅ WorldNewsAPI — опционально (требуется ключ)
@@ -61,7 +62,6 @@ config_comment = """
 - freshrss_username / password: учётные данные FreshRSS
 
 РЕКОМЕНДАЦИИ:
-- Для FreshRSS используйте локальный IP (например, 192.168.x.x или 127.0.0.1)
 - Если все источники отключены — будет использоваться только Mail.ru
 """
 
