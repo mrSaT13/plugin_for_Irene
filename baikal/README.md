@@ -9,9 +9,8 @@
 
 ## 🗣️ Как использовать?
 
-- «создай событие двадцать пятого января встреча»  
-- «создай новое событие 10 июня оплата ЖКХ»  
-- «создай событие тринадцатого октября день рождения Саши»
+- «создай событие двадцать пятого января встреча»
+  
 <img width="509" height="158" alt="изображение" src="https://github.com/user-attachments/assets/7787a8f3-4635-428e-a1d4-119e1ef596ae" />
 <img width="509" height="153" alt="изображение" src="https://github.com/user-attachments/assets/039fa60f-060e-47fd-93c2-30b018aea039" />
 <img width="1119" height="393" alt="изображение" src="https://github.com/user-attachments/assets/bd8d6376-1d59-4bd6-9c6d-fb4dc94e0fb8" />
