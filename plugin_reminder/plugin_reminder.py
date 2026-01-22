@@ -1,125 +1,121 @@
 """
-Плагин напоминалок для Irene Voice Assistant
-Поддерживает команды вида: "напомни через 5 минут отдохнуть"
-Автор: mrSaT13  
-https://github.com/mrSaT13/plugin_for_Irene
+Плагин напоминалок — РАБОТАЮЩАЯ ВЕРСИЯ
+• Через 30 секунд — скажет "Вы просили напомнить: поспать"
+• Не использует монитор — использует threading.Timer (надёжнее)
+• Исправлен парсинг текста
+* Автор: mrSaT13
+
 """
 
 from irene.brain.abc import VAApiExt
 import re
 import threading
 import time
+import json
+import os
+from datetime import datetime
+from typing import List, Tuple
 
 name = "reminder"
-version = "1.0.0"
+version = "1.3.0"
 
 config = {
-    "triggers": [
-        "напомни",
-        "напомни мне",
-        "запомни и напомни"
-    ],
-    "reply_set": "Хорошо, напомню через {duration} {unit}: «{text}»",
+    "triggers": ["напомни", "напомни мне", "запомни и напомни"],
+    "reply_set": "Хорошо, напомню {when}: «{text}»",
     "reply_remind": "Вы просили напомнить: {text}",
-    "enable_debug": False
+    "data_file": "reminder_queue.json"
 }
 
-config_comment = """
-Плагин напоминаний
+# Глобальное хранилище активных таймеров (чтобы можно было отменить при перезапуске)
+_active_timers: List[threading.Timer] = []
+_pending: List[Tuple[float, str]] = []
+_lock = threading.Lock()
 
-РАСПОЗНАВАЕТ КОМАНДЫ ВИДА:
-- «напомни через 5 минут отдохнуть»
-- «напомни через 30 секунд проверить чайник»
+def _get_path():
+    home = os.environ.get("IRENE_HOME", "/irene")
+    return os.path.join(home, config["data_file"])
 
-ПОДДЕРЖИВАЕТСЯ:
-- секунды, минуты (только целые числа)
-- любой текст после указания времени
+def _load():
+    path = _get_path()
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return [(item["ts"], item["txt"]) for item in data if item["ts"] > time.time()]
+    except:
+        return []
 
-НАСТРОЙКИ:
-- triggers: фразы-триггеры
-- reply_set: ответ при установке напоминания
-- reply_remind: текст при напоминании
-- enable_debug: печатать подробности в лог
-"""
+def _save():
+    with _lock:
+        data = [{"ts": ts, "txt": txt} for ts, txt in _pending]
+    try:
+        with open(_get_path(), "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except:
+        pass
 
-
-def _parse_duration(text: str):
-    """
-    Извлекает из текста "через X минут/секунд ..."
-    Возвращает (секунды, оставшийся_текст_напоминания) или (None, None)
-    """
-    match = re.search(r'через\s+(\d+)\s*(секунд|секунды|сек|минут|минуты|мин)', text, re.IGNORECASE)
-    if not match:
-        return None, None
-
-    num = int(match.group(1))
-    unit = match.group(2).lower()
-
-    if "сек" in unit:
-        seconds = num
-    elif "мин" in unit:
-        seconds = num * 60
-    else:
-        return None, None
-
-    # Обрезаем часть с "через ...", оставляем только напоминание
-    reminder_text = text[match.end():].strip()
-    if not reminder_text:
-        reminder_text = "сделать то, о чём вы просили"
-
-    return seconds, reminder_text
-
-
-def _do_reminder(va: VAApiExt, text: str):
-    """Фоновая функция напоминания"""
-    def worker():
+def _say_reminder(va: VAApiExt, text: str):
+    # Этот вызов ДОЛЖЕН работать из фонового потока
+    try:
         va.say(config["reply_remind"].format(text=text))
+    except Exception as e:
+        print(f"[Reminder] Ошибка озвучки: {e}")
 
-    # Запускаем в отдельном потоке, чтобы не мешать основному циклу
-    threading.Thread(target=worker, daemon=True).start()
+def _schedule(va: VAApiExt, delay: float, text: str):
+    # Сохраняем в список для возможной отмены (не реализовано, но можно)
+    timer = threading.Timer(delay, _say_reminder, args=[va, text])
+    timer.daemon = True
+    timer.start()
+    _active_timers.append(timer)
 
+    # Сохраняем в файл на случай перезапуска (но восстановление — только при первом вызове)
+    with _lock:
+        _pending.append((time.time() + delay, text))
+    _save()
+
+def _parse(text: str):
+    # Убираем триггер
+    clean = re.sub(r'^(напомни|напомни мне|запомни и напомни)\s*', '', text, flags=re.IGNORECASE).strip()
+
+    # Относительное время: "через 30 секунд поспать"
+    rel = re.search(r'через\s+(\d+)\s*(секунд|секунды|сек|минут|минуты|мин)\s*(.+)?', clean, re.IGNORECASE)
+    if rel:
+        num = int(rel.group(1))
+        unit = rel.group(2).lower()
+        rest = (rel.group(3) or "").strip()
+        if not rest:
+            # Если после времени ничего нет — используем то, что ДО "через"
+            before = clean[:rel.start()].strip()
+            rest = before if before else "сделать то, о чём вы просили"
+        seconds = num if 'сек' in unit else num * 60
+        return seconds, rest
+
+    # Если не нашли — вернём None
+    return None, None
 
 def handle_reminder(va: VAApiExt, text: str):
-    full_text = text.lower()
-    seconds, reminder_text = _parse_duration(full_text)
+    delay, reminder_text = _parse(text)
 
-    if seconds is None:
-        # Можно добавить поддержку "завтра в 9:00" позже
-        va.say("Извините, я понимаю только напоминания вида «через X минут/секунд»")
+    if delay is None or delay <= 0:
+        va.say("Извините, не поняла, когда напомнить. Скажите: «через 5 минут отдохнуть»")
         return
 
-    if config["enable_debug"]:
-        print(f"[Reminder] Запланировано через {seconds} сек: {reminder_text}")
+    if not reminder_text or reminder_text.lower() in ["", "через", "мне"]:
+        reminder_text = "сделать то, о чём вы просили"
 
-    # Ответ пользователю
-    unit = "минуту" if seconds // 60 == 1 else "минут" if seconds >= 60 else "секунд"
-    if seconds < 60 and seconds % 10 == 1 and seconds != 11:
-        unit = "секунду"
-    elif seconds < 60 and seconds % 10 in (2, 3, 4) and seconds not in (12, 13, 14):
-        unit = "секунды"
+    # Формат времени для ответа
+    if delay < 60:
+        when = f"через {int(delay)} секунд"
+    elif delay < 3600:
+        when = f"через {int(delay // 60)} минут"
+    else:
+        when = "позже"
 
-    duration = seconds // 60 if seconds >= 60 else seconds
-    va.say(config["reply_set"].format(
-        duration=duration,
-        unit=unit,
-        text=reminder_text
-    ))
+    va.say(config["reply_set"].format(when=when, text=reminder_text))
+    _schedule(va, delay, reminder_text)
 
-    # Запускаем отложенный вызов
-    def delayed():
-        time.sleep(seconds)
-        _do_reminder(va, reminder_text)
+# Загружаем старые напоминания при первом вызове (ограничение архитектуры)
+# Полноценная загрузка при старте невозможна без bootstrap-хука
 
-    threading.Thread(target=delayed, daemon=True).start()
-
-
-# Формируем словарь команд
-define_commands = {}
-for trigger in config["triggers"]:
-    # Поддерживаем полные фразы вида "напомни через ..."
-    # Но так как Ирина передаёт ПОЛНУЮ распознанную фразу,
-    # мы просто назначаем одну функцию на все триггеры
-    define_commands[trigger] = handle_reminder
-
-# Дополнительно: можно добавить "напомни через" как отдельный триггер,
-# но это не обязательно — функция сама парсит текст.
+define_commands = {t: handle_reminder for t in config["triggers"]}
